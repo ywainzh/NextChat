@@ -73,6 +73,14 @@ git push origin 2026.07.03-1
 
 认证成功时，`ssh -T github-ywainzh` 会显示 `Hi ywainzh!`。如果出现 `Permission denied` 或 GitHub 提示其他账号，先修正 SSH Host 或密钥，不能继续发布。
 
+推送 tag 后必须打开 GitHub Actions 确认 `Publish GHCR image` 出现对应 run：
+
+```text
+https://github.com/ywainzh/NextChat/actions/workflows/docker.yml
+```
+
+如果页面仍显示 `This workflow has no runs yet`，说明 tag push 没有触发 Actions。此时先在 GitHub 网页确认仓库 Actions 已启用，必要时用网页上的 `Run workflow` 手动触发，或用有权限的 Personal Access Token / GitHub App token 重新推送 tag。不要在 GHCR 镜像不存在时继续服务器部署。
+
 镜像发布后检查固定 tag 是否存在：
 
 ```bash
