@@ -81,6 +81,14 @@ https://github.com/ywainzh/NextChat/actions/workflows/docker.yml
 
 如果页面仍显示 `This workflow has no runs yet`，说明 tag push 没有触发 Actions。此时先在 GitHub 网页确认仓库 Actions 已启用，必要时用网页上的 `Run workflow` 手动触发，或用有权限的 Personal Access Token / GitHub App token 重新推送 tag。不要在 GHCR 镜像不存在时继续服务器部署。
 
+手动触发时推荐选择 `main` 分支，并在 `image_tag` 输入固定发布 tag，例如：
+
+```text
+2026.07.03-3
+```
+
+这样 GHCR 会生成 `ghcr.io/ywainzh/nextchat:2026.07.03-3`，仍然满足固定 tag 部署要求。`image_tag` 禁止填写 `latest`。
+
 镜像发布后检查固定 tag 是否存在：
 
 ```bash

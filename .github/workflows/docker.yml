@@ -2,6 +2,11 @@ name: Publish GHCR image
 
 on:
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Optional fixed image tag, for example 2026.07.03-3"
+        required: false
+        type: string
   release:
     types: [published]
   push:
@@ -38,6 +43,7 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
+            type=raw,value=${{ inputs.image_tag }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.image_tag != '' && inputs.image_tag != 'latest' }}
             type=ref,event=tag
             type=ref,event=pr
             type=sha,prefix=sha-
