@@ -192,7 +192,7 @@ df -h /
 docker system df
 ```
 
-健康检查期望返回包含 `"ok":true` 的 JSON；Compose healthcheck 使用 `wget -qO- http://127.0.0.1:3000/api/health >/dev/null`，避免 JSON 空格、转义差异或 BusyBox `--spider` 行为导致误判。
+健康检查期望返回包含 `"ok":true` 的 JSON；Compose healthcheck 使用 `wget -qO- http://$HOSTNAME:3000/api/health >/dev/null`。Next standalone 在容器内绑定到容器 hostname，不能用 `127.0.0.1` 做容器内健康检查。
 
 ## Nginx HTTPS
 
