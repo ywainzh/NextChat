@@ -7,6 +7,11 @@ on:
         description: "Optional fixed image tag, for example 2026.07.03-3"
         required: false
         type: string
+      platforms:
+        description: "Docker platforms to build"
+        required: false
+        default: "linux/amd64"
+        type: string
   release:
     types: [published]
   push:
@@ -58,7 +63,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ inputs.platforms || 'linux/amd64' }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

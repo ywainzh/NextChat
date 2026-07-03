@@ -87,7 +87,7 @@ https://github.com/ywainzh/NextChat/actions/workflows/docker.yml
 2026.07.03-3
 ```
 
-这样 GHCR 会生成 `ghcr.io/ywainzh/nextchat:2026.07.03-3`，仍然满足固定 tag 部署要求。`image_tag` 禁止填写 `latest`。
+`platforms` 默认填写 `linux/amd64`，适合当前阿里云 x86_64 服务器，也能显著缩短构建时间。这样 GHCR 会生成 `ghcr.io/ywainzh/nextchat:2026.07.03-3`，仍然满足固定 tag 部署要求。`image_tag` 禁止填写 `latest`。
 
 镜像发布后检查固定 tag 是否存在：
 
