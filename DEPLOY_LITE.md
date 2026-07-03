@@ -62,6 +62,17 @@ git tag 2026.07.03-1
 git push origin 2026.07.03-1
 ```
 
+本机 GitHub 凭据如果同时存在多个账号，必须使用 `~/.ssh/config` 中的 `github-ywainzh` Host 推送，避免 HTTPS 凭据被识别成其他账号：
+
+```bash
+ssh -T github-ywainzh
+git remote set-url origin github-ywainzh:ywainzh/NextChat.git
+git push origin main
+git push origin 2026.07.03-1
+```
+
+认证成功时，`ssh -T github-ywainzh` 会显示 `Hi ywainzh!`。如果出现 `Permission denied` 或 GitHub 提示其他账号，先修正 SSH Host 或密钥，不能继续发布。
+
 镜像发布后检查固定 tag 是否存在：
 
 ```bash
