@@ -192,7 +192,7 @@ df -h /
 docker system df
 ```
 
-健康检查期望返回包含 `"ok":true` 的 JSON；Compose healthcheck 只检查 `/api/health` 返回 HTTP 200，避免 JSON 空格或转义差异导致误判。
+健康检查期望返回包含 `"ok":true` 的 JSON；Compose healthcheck 使用 `wget -qO- http://127.0.0.1:3000/api/health >/dev/null`，避免 JSON 空格、转义差异或 BusyBox `--spider` 行为导致误判。
 
 ## Nginx HTTPS
 
