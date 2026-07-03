@@ -192,7 +192,7 @@ df -h /
 docker system df
 ```
 
-健康检查期望返回包含 `"ok":true` 的 JSON；Compose healthcheck 使用 `wget -qO- http://$HOSTNAME:3000/api/health >/dev/null`。Next standalone 在容器内绑定到容器 hostname，不能用 `127.0.0.1` 做容器内健康检查。
+健康检查期望返回包含 `"ok":true` 的 JSON；Compose healthcheck 使用 `wget -qO- http://$$HOSTNAME:3000/api/health >/dev/null`。这里必须写 `$$HOSTNAME`，让 Docker Compose 保留 `$HOSTNAME` 给容器内 shell 展开。Next standalone 在容器内绑定到容器 hostname，不能用 `127.0.0.1` 做容器内健康检查。
 
 ## Nginx HTTPS
 
