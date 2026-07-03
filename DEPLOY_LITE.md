@@ -192,7 +192,7 @@ df -h /
 docker system df
 ```
 
-健康检查期望返回包含 `"ok":true` 的 JSON。
+健康检查期望返回包含 `"ok":true` 的 JSON；Compose healthcheck 只检查 `/api/health` 返回 HTTP 200，避免 JSON 空格或转义差异导致误判。
 
 ## Nginx HTTPS
 
