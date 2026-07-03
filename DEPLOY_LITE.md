@@ -119,13 +119,13 @@ cd /opt/nextchat
 
 ```bash
 APP_IMAGE=ghcr.io/ywainzh/nextchat:2026.07.03-1
-PORT=127.0.0.1:33000
+HOST_PORT=127.0.0.1:33000
 OPENAI_API_KEY=replace-with-openai-key
 CODE=your-password
 TAVILY_API_KEY=replace-with-tavily-key
 ```
 
-按需填写 `BASE_URL`、`DEEPSEEK_API_KEY`、`GOOGLE_API_KEY`、`ANTHROPIC_API_KEY` 等业务变量。真实密钥只写服务器 `.env`，不能提交到 Git。
+按需填写 `BASE_URL`、`DEEPSEEK_API_KEY`、`GOOGLE_API_KEY`、`ANTHROPIC_API_KEY` 等业务变量。真实密钥只写服务器 `.env`，不能提交到 Git。不要把宿主机端口写到 `PORT`，Next.js 会把 `PORT` 当作容器内部监听端口；宿主机端口统一使用 `HOST_PORT`。
 
 ## 部署前检查
 
@@ -143,7 +143,7 @@ test -f docker-compose.yml
 test -f .env
 test -f "$RELEASE_DOC"
 grep '^APP_IMAGE=' .env
-grep '^PORT=127.0.0.1:33000$' .env
+grep '^HOST_PORT=127.0.0.1:33000$' .env
 grep -q ':latest$' .env && echo 'ERROR: latest is forbidden' && exit 1 || echo 'APP_IMAGE tag ok'
 docker compose config
 docker manifest inspect "$APP_IMAGE"
@@ -176,7 +176,7 @@ test -f docker-compose.yml
 test -f .env
 test -f "$RELEASE_DOC"
 grep '^APP_IMAGE=' .env
-grep '^PORT=127.0.0.1:33000$' .env
+grep '^HOST_PORT=127.0.0.1:33000$' .env
 grep -q ':latest$' .env && echo 'ERROR: latest is forbidden' && exit 1 || echo 'APP_IMAGE tag ok'
 docker compose config
 docker manifest inspect "$APP_IMAGE"
@@ -254,7 +254,7 @@ docker system df
 test -f docker-compose.yml
 test -f .env
 test -f "$RELEASE_DOC"
-grep '^PORT=127.0.0.1:33000$' .env
+grep '^HOST_PORT=127.0.0.1:33000$' .env
 grep -q ':latest$' .env && echo 'ERROR: latest is forbidden' && exit 1 || echo 'APP_IMAGE tag ok'
 docker compose config
 docker manifest inspect "$APP_IMAGE"
@@ -369,7 +369,7 @@ docker image ls --format '{{.Repository}}:{{.Tag}} {{.Size}}' | grep 'ghcr.io/yw
 3. 再看本机服务：`curl -f http://127.0.0.1:33000/api/health`。
 4. 再看 Nginx：`sudo nginx -t`、`sudo tail -n 100 /var/log/nginx/error.log`。
 5. 再看资源：`free -h`、`df -h`、`docker stats --no-stream nextchat`。
-6. 再检查 `.env`：`grep -E '^(APP_IMAGE|PORT|OPENAI_API_KEY|CODE|BASE_URL|DEEPSEEK_API_KEY|TAVILY_API_KEY)=' .env`。
+6. 再检查 `.env`：`grep -E '^(APP_IMAGE|HOST_PORT|OPENAI_API_KEY|CODE|BASE_URL|DEEPSEEK_API_KEY|TAVILY_API_KEY)=' .env`。
 7. 如果新版本无法恢复，按回滚步骤切回上一版固定 tag。
 
 ## 标准部署结果回报

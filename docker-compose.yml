@@ -6,7 +6,7 @@ services:
     env_file:
       - .env
     ports:
-      - "${PORT:-127.0.0.1:33000}:3000"
+      - "${HOST_PORT:-127.0.0.1:33000}:3000"
     cpus: "1.50"
     mem_limit: 768m
     mem_reservation: 256m
