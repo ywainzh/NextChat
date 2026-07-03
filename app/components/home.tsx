@@ -5,19 +5,17 @@ require("../polyfill");
 import { useEffect, useState } from "react";
 import styles from "./home.module.scss";
 
-import BotIcon from "../icons/bot.svg";
-import LoadingIcon from "../icons/three-dots.svg";
-
 import { getCSSVar, useMobileScreen } from "../utils";
 
 import dynamic from "next/dynamic";
-import { Path, SlotID } from "../constant";
+import { Path } from "../constant";
 import { ErrorBoundary } from "./error";
 
 import { getISOLang, getLang } from "../locales";
 
 import {
   HashRouter as Router,
+  Navigate,
   Route,
   Routes,
   useLocation,
@@ -27,18 +25,11 @@ import { useAppConfig } from "../store/config";
 import { AuthPage } from "./auth";
 import { getClientConfig } from "../config/client";
 import { type ClientApi, getClientApi } from "../client/api";
-import { useAccessStore } from "../store";
+import { useAccessStore, useChatStore } from "../store";
 import clsx from "clsx";
-import { initializeMcpSystem, isMcpEnabled } from "../mcp/actions";
-
-export function Loading(props: { noLogo?: boolean }) {
-  return (
-    <div className={clsx("no-dark", styles["loading-content"])}>
-      {!props.noLogo && <BotIcon />}
-      <LoadingIcon />
-    </div>
-  );
-}
+import { ServiceProvider } from "../constant";
+import { syncOpenAICompatibleModels } from "../utils/openai-compatible";
+import { Loading, WindowContent } from "./home-shell";
 
 const Artifacts = dynamic(async () => (await import("./artifacts")).Artifacts, {
   loading: () => <Loading noLogo />,
@@ -52,35 +43,9 @@ const Chat = dynamic(async () => (await import("./chat")).Chat, {
   loading: () => <Loading noLogo />,
 });
 
-const NewChat = dynamic(async () => (await import("./new-chat")).NewChat, {
-  loading: () => <Loading noLogo />,
-});
-
-const MaskPage = dynamic(async () => (await import("./mask")).MaskPage, {
-  loading: () => <Loading noLogo />,
-});
-
-const PluginPage = dynamic(async () => (await import("./plugin")).PluginPage, {
-  loading: () => <Loading noLogo />,
-});
-
-const SearchChat = dynamic(
-  async () => (await import("./search-chat")).SearchChatPage,
-  {
-    loading: () => <Loading noLogo />,
-  },
-);
-
 const Sd = dynamic(async () => (await import("./sd")).Sd, {
   loading: () => <Loading noLogo />,
 });
-
-const McpMarketPage = dynamic(
-  async () => (await import("./mcp-market")).McpMarketPage,
-  {
-    loading: () => <Loading noLogo />,
-  },
-);
 
 export function useSwitchTheme() {
   const config = useAppConfig();
@@ -149,14 +114,6 @@ const loadAsyncGoogleFont = () => {
   document.head.appendChild(linkEl);
 };
 
-export function WindowContent(props: { children: React.ReactNode }) {
-  return (
-    <div className={styles["window-content"]} id={SlotID.AppBody}>
-      {props?.children}
-    </div>
-  );
-}
-
 function Screen() {
   const config = useAppConfig();
   const location = useLocation();
@@ -195,13 +152,13 @@ function Screen() {
         <WindowContent>
           <Routes>
             <Route path={Path.Home} element={<Chat />} />
-            <Route path={Path.NewChat} element={<NewChat />} />
-            <Route path={Path.Masks} element={<MaskPage />} />
-            <Route path={Path.Plugins} element={<PluginPage />} />
-            <Route path={Path.SearchChat} element={<SearchChat />} />
+            <Route
+              path={Path.NewChat}
+              element={<Navigate to={Path.Chat} replace />}
+            />
             <Route path={Path.Chat} element={<Chat />} />
             <Route path={Path.Settings} element={<Settings />} />
-            <Route path={Path.McpMarket} element={<McpMarketPage />} />
+            <Route path="*" element={<Navigate to={Path.Home} replace />} />
           </Routes>
         </WindowContent>
       </>
@@ -222,16 +179,54 @@ function Screen() {
 
 export function useLoadData() {
   const config = useAppConfig();
-
-  const api: ClientApi = getClientApi(config.modelConfig.providerName);
+  const accessStore = useAccessStore();
+  const chatStore = useChatStore();
+  const currentModelProvider = config.modelConfig.providerName;
+  const configHydrated = config._hasHydrated;
+  const chatHydrated = chatStore._hasHydrated;
+  const accessHydrated = accessStore._hasHydrated;
 
   useEffect(() => {
-    (async () => {
+    if (!configHydrated || !accessHydrated || !chatHydrated) {
+      return;
+    }
+
+    const shouldSyncOpenAICompatibleModels =
+      accessStore.useCustomConfig &&
+      accessStore.provider === ServiceProvider.OpenAI;
+
+    const syncModels = async () => {
+      if (shouldSyncOpenAICompatibleModels) {
+        await syncOpenAICompatibleModels();
+        return;
+      }
+
+      const api: ClientApi = getClientApi(
+        currentModelProvider || ServiceProvider.OpenAI,
+      );
       const models = await api.llm.models();
       config.mergeModels(models);
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    };
+
+    const timer = setTimeout(
+      () => {
+        void syncModels();
+      },
+      shouldSyncOpenAICompatibleModels ? 600 : 0,
+    );
+
+    return () => clearTimeout(timer);
+  }, [
+    accessHydrated,
+    accessStore.openaiApiKey,
+    accessStore.openaiUrl,
+    accessStore.provider,
+    accessStore.useCustomConfig,
+    chatHydrated,
+    config.mergeModels,
+    configHydrated,
+    currentModelProvider,
+  ]);
 }
 
 export function Home() {
@@ -242,20 +237,6 @@ export function Home() {
   useEffect(() => {
     console.log("[Config] got config from build time", getClientConfig());
     useAccessStore.getState().fetch();
-
-    const initMcp = async () => {
-      try {
-        const enabled = await isMcpEnabled();
-        if (enabled) {
-          console.log("[MCP] initializing...");
-          await initializeMcpSystem();
-          console.log("[MCP] initialized");
-        }
-      } catch (err) {
-        console.error("[MCP] failed to initialize:", err);
-      }
-    };
-    initMcp();
   }, []);
 
   if (!useHasHydrated()) {

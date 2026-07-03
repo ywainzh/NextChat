@@ -1,6 +1,7 @@
 "use client";
 // azure and openai, using same models. so using same LLMApi.
 import {
+  ACCESS_CODE_PREFIX,
   ApiPath,
   OPENAI_BASE_URL,
   DEFAULT_MODELS,
@@ -14,7 +15,6 @@ import {
   useAccessStore,
   useAppConfig,
   useChatStore,
-  usePluginStore,
 } from "@/app/store";
 import { collectModelsWithDefaultModel } from "@/app/utils/model";
 import {
@@ -25,6 +25,11 @@ import {
 } from "@/app/utils/chat";
 import { cloudflareAIGatewayUrl } from "@/app/utils/cloudflare";
 import { ModelSize, DalleQuality, DalleStyle } from "@/app/typing";
+import type {
+  WebSearchDecision,
+  WebSearchResponse,
+  WebSearchTrace,
+} from "@/app/typing/web-search";
 
 import {
   ChatOptions,
@@ -37,6 +42,7 @@ import {
 } from "../api";
 import Locale from "../../locales";
 import { getClientConfig } from "@/app/config/client";
+import { prettyObject } from "@/app/utils/format";
 import {
   getMessageTextContent,
   isVisionModel,
@@ -77,6 +83,178 @@ export interface DalleRequestPayload {
   size: ModelSize;
   quality: DalleQuality;
   style: DalleStyle;
+}
+
+const openAICompatibleToolSupport = new Map<string, boolean>();
+const WEB_SEARCH_TOOL_NAME = "web_search";
+
+function buildOpenAICompatibleToolSupportKey(endpoint: string, model: string) {
+  const normalizedEndpoint = endpoint.trim().toLowerCase();
+  const normalizedModel = model.trim().toLowerCase();
+
+  if (!normalizedEndpoint || !normalizedModel) {
+    return "";
+  }
+
+  return `${normalizedEndpoint}::${normalizedModel}`;
+}
+
+function getOpenAICompatibleToolSupport(endpoint: string, model: string) {
+  const key = buildOpenAICompatibleToolSupportKey(endpoint, model);
+  return key ? openAICompatibleToolSupport.get(key) : undefined;
+}
+
+function markOpenAICompatibleToolSupport(
+  endpoint: string,
+  model: string,
+  supported: boolean,
+) {
+  const key = buildOpenAICompatibleToolSupportKey(endpoint, model);
+  if (!key) {
+    return;
+  }
+
+  openAICompatibleToolSupport.set(key, supported);
+}
+
+function shouldEnableBuiltinWebSearch(
+  modelConfig: {
+    model: string;
+    providerName?: string;
+    enableWebSearch?: boolean;
+  },
+  latestUserText: string,
+) {
+  if (modelConfig.providerName !== ServiceProvider.OpenAI) {
+    return false;
+  }
+
+  if (modelConfig.enableWebSearch === false) {
+    return false;
+  }
+
+  return latestUserText.trim().length > 0;
+}
+
+function shouldRetryWithoutTools(errorText: string) {
+  const normalizedError = errorText.toLowerCase();
+
+  return (
+    normalizedError.includes("tool_calls") ||
+    normalizedError.includes("tools") ||
+    normalizedError.includes("tool choice") ||
+    normalizedError.includes("function calling") ||
+    normalizedError.includes("tool calling") ||
+    normalizedError.includes("unsupported parameter") ||
+    normalizedError.includes("unknown parameter") ||
+    normalizedError.includes("extra fields not permitted") ||
+    (normalizedError.includes("does not support") &&
+      (normalizedError.includes("tool") ||
+        normalizedError.includes("function")))
+  );
+}
+
+function getWebSearchInstructionRole(isO1OrO3: boolean) {
+  return isO1OrO3 ? "developer" : "system";
+}
+
+function createWebSearchInstruction(isO1OrO3: boolean) {
+  return {
+    role: getWebSearchInstructionRole(isO1OrO3),
+    content:
+      "You may use the web_search tool only when the user's request depends on up-to-date, changing, or externally verifiable information. Do not search for stable general knowledge. When you search, use a short precise query and base your answer on the returned results.",
+  } as const;
+}
+
+function createDecisionInstruction(isO1OrO3: boolean) {
+  return {
+    role: getWebSearchInstructionRole(isO1OrO3),
+    content:
+      'Decide whether the latest user request needs web search. Reply with JSON only using this exact shape: {"needWebSearch": boolean, "query": string}. If web search is not needed, return an empty query string.',
+  } as const;
+}
+
+function getLatestUserText(messages: ChatOptions["messages"]) {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === "user") {
+      return getMessageTextContent(messages[i] as any).trim();
+    }
+  }
+
+  return "";
+}
+
+function truncateText(text: string, maxLength: number) {
+  const normalized = text.trim().replace(/\s+/g, " ");
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return normalized.slice(0, maxLength - 1) + "…";
+}
+
+function parseWebSearchDecision(rawContent: string): WebSearchDecision {
+  const content = rawContent.trim();
+
+  try {
+    const parsed = JSON.parse(content) as WebSearchDecision;
+    return {
+      needWebSearch: !!parsed?.needWebSearch,
+      query: parsed?.query?.trim?.() ?? "",
+    };
+  } catch {
+    const match = content.match(/\{[\s\S]*\}/);
+    if (!match) {
+      return { needWebSearch: false, query: "" };
+    }
+
+    try {
+      const parsed = JSON.parse(match[0]) as WebSearchDecision;
+      return {
+        needWebSearch: !!parsed?.needWebSearch,
+        query: parsed?.query?.trim?.() ?? "",
+      };
+    } catch {
+      return { needWebSearch: false, query: "" };
+    }
+  }
+}
+
+function formatWebSearchResponseForModel(search: WebSearchResponse) {
+  return JSON.stringify({
+    query: search.query,
+    results: search.results.map((result) => ({
+      title: result.title,
+      url: result.url,
+      content: truncateText(result.content, 400),
+      score: result.score,
+    })),
+    error: search.error,
+  });
+}
+
+function createWebSearchContextMessage(
+  trace: WebSearchTrace,
+  isO1OrO3: boolean,
+) {
+  const header =
+    "Below are fresh web search results gathered just now. Use them when helpful, prefer them over stale memory, and cite concrete facts from them instead of inventing details.";
+  const sources =
+    trace.results.length > 0
+      ? trace.results
+          .map(
+            (result, index) =>
+              `${index + 1}. ${result.title}\nURL: ${
+                result.url
+              }\nSnippet: ${truncateText(result.content, 500)}`,
+          )
+          .join("\n\n")
+      : "No relevant results were returned.";
+
+  return {
+    role: getWebSearchInstructionRole(isO1OrO3),
+    content: `${header}\n\nSearch query: ${trace.query}\n\n${sources}`,
+  } as const;
 }
 
 export class ChatGPTApi implements LLMApi {
@@ -183,14 +361,285 @@ export class ChatGPTApi implements LLMApi {
     }
   }
 
+  private async extractErrorMessage(res: Response) {
+    let errorMessage = `${res.status} ${res.statusText}`;
+
+    try {
+      const resJson = await res.clone().json();
+      errorMessage =
+        resJson?.error?.message ??
+        resJson?.error ??
+        resJson?.message ??
+        prettyObject(resJson) ??
+        errorMessage;
+    } catch {
+      const text = await res.clone().text();
+      errorMessage = text || errorMessage;
+    }
+
+    return errorMessage;
+  }
+
+  private async sendChatRequest(
+    chatPath: string,
+    payload: any,
+    controller: AbortController,
+    model: string,
+    tools?: any[],
+    timeoutMS?: number,
+  ) {
+    const requestTimeoutId = setTimeout(
+      () => controller.abort(),
+      timeoutMS ?? getTimeoutMSByModel(model),
+    );
+
+    try {
+      const res = await fetch(chatPath, {
+        method: "POST",
+        body: JSON.stringify({
+          ...payload,
+          tools: tools?.length ? tools : undefined,
+        }),
+        signal: controller.signal,
+        headers: getHeaders(),
+      });
+
+      if (!res.ok) {
+        throw new Error(await this.extractErrorMessage(res));
+      }
+
+      return res;
+    } finally {
+      clearTimeout(requestTimeoutId);
+    }
+  }
+
+  private buildWebSearchTools() {
+    return [
+      {
+        type: "function",
+        function: {
+          name: WEB_SEARCH_TOOL_NAME,
+          description:
+            "Search the web for up-to-date factual information when needed.",
+          parameters: {
+            type: "object",
+            properties: {
+              query: {
+                type: "string",
+                description: "A short and precise search query",
+              },
+            },
+            required: ["query"],
+          },
+        },
+      },
+    ];
+  }
+
+  private async requestWebSearch(query: string) {
+    try {
+      const response = await fetch("/api/search", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query,
+          tavilyApiKey: useAccessStore.getState().tavilyApiKey,
+        }),
+      });
+
+      const json = (await response.json()) as WebSearchResponse;
+      if (!response.ok && !json?.error) {
+        json.error = `${response.status} ${response.statusText}`;
+      }
+
+      return json;
+    } catch (error) {
+      return {
+        ok: false,
+        provider: "tavily",
+        query,
+        results: [],
+        error: error instanceof Error ? error.message : "Web search failed",
+      } satisfies WebSearchResponse;
+    }
+  }
+
+  private async resolveToolSupport(args: {
+    chatPath: string;
+    model: string;
+    controller: AbortController;
+    tools: any[];
+    isO1OrO3: boolean;
+    isGpt5: boolean;
+  }) {
+    const cached = getOpenAICompatibleToolSupport(args.chatPath, args.model);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const probePayload: Record<string, unknown> = {
+      messages: [
+        {
+          role: "user",
+          content: "Reply with OK.",
+        },
+      ],
+      stream: false,
+      model: args.model,
+      temperature: 0,
+      presence_penalty: 0,
+      frequency_penalty: 0,
+      top_p: 1,
+    };
+
+    if (args.isGpt5 || args.isO1OrO3) {
+      probePayload.max_completion_tokens = 32;
+    } else {
+      probePayload.max_tokens = 32;
+    }
+
+    try {
+      await this.sendChatRequest(
+        args.chatPath,
+        probePayload,
+        args.controller,
+        args.model,
+        args.tools,
+        15000,
+      );
+      markOpenAICompatibleToolSupport(args.chatPath, args.model, true);
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (shouldRetryWithoutTools(message)) {
+        markOpenAICompatibleToolSupport(args.chatPath, args.model, false);
+        return false;
+      }
+
+      console.warn("[Web Search] tool support probe failed", message);
+      return undefined;
+    }
+  }
+
+  private async buildDecisionSearchPayload(args: {
+    chatPath: string;
+    controller: AbortController;
+    model: string;
+    requestPayload: RequestPayload;
+    options: ChatOptions;
+    isO1OrO3: boolean;
+    isGpt5: boolean;
+  }) {
+    const decisionPayload: Record<string, unknown> = {
+      ...args.requestPayload,
+      stream: false,
+      messages: [
+        createDecisionInstruction(args.isO1OrO3),
+        ...args.requestPayload.messages,
+      ],
+      temperature: 0,
+      presence_penalty: 0,
+      frequency_penalty: 0,
+      top_p: 1,
+    };
+
+    delete decisionPayload.max_tokens;
+    delete decisionPayload.max_completion_tokens;
+
+    if (args.isGpt5 || args.isO1OrO3) {
+      decisionPayload.max_completion_tokens = 128;
+    } else {
+      decisionPayload.max_tokens = 128;
+    }
+
+    try {
+      const response = await this.sendChatRequest(
+        args.chatPath,
+        decisionPayload,
+        args.controller,
+        args.model,
+      );
+      const responseJson = await response.json();
+      const decisionMessage = await this.extractMessage(responseJson);
+      const decision = parseWebSearchDecision(
+        typeof decisionMessage === "string"
+          ? decisionMessage
+          : JSON.stringify(decisionMessage),
+      );
+
+      if (!decision.needWebSearch || !decision.query) {
+        return args.requestPayload;
+      }
+
+      const search = await this.requestWebSearch(decision.query);
+      const trace: WebSearchTrace = {
+        query: search.query || decision.query,
+        searchedAt: new Date().toISOString(),
+        mode: "decision",
+        results: search.results ?? [],
+        error: search.ok ? undefined : search.error || "Web search failed",
+      };
+
+      args.options.onWebSearchTrace?.(trace);
+
+      if (!search.ok) {
+        return args.requestPayload;
+      }
+
+      return {
+        ...args.requestPayload,
+        messages: [
+          createWebSearchContextMessage(trace, args.isO1OrO3),
+          ...args.requestPayload.messages,
+        ],
+      } satisfies RequestPayload;
+    } catch (error) {
+      console.warn(
+        "[Web Search] decision flow failed",
+        error instanceof Error ? error.message : error,
+      );
+      return args.requestPayload;
+    }
+  }
+
+  private createWebSearchToolFuncs(args: { options: ChatOptions }) {
+    const api = this;
+
+    return {
+      async [WEB_SEARCH_TOOL_NAME](toolArgs: { query?: string }) {
+        const query = toolArgs?.query?.trim?.() ?? "";
+        const search = await api.requestWebSearch(query);
+        const trace: WebSearchTrace = {
+          query: search.query || query,
+          searchedAt: new Date().toISOString(),
+          mode: "tool",
+          results: search.results ?? [],
+          error: search.ok ? undefined : search.error || "Web search failed",
+        };
+
+        args.options.onWebSearchTrace?.(trace);
+
+        return {
+          status: search.ok ? 200 : 502,
+          statusText: search.ok ? "OK" : search.error || "Web search failed",
+          data: search.ok
+            ? JSON.parse(formatWebSearchResponseForModel(search))
+            : { error: trace.error },
+        };
+      },
+    };
+  }
+
   async chat(options: ChatOptions) {
     const modelConfig = {
       ...useAppConfig.getState().modelConfig,
-      ...useChatStore.getState().currentSession().mask.modelConfig,
-      ...{
-        model: options.config.model,
-        providerName: options.config.providerName,
-      },
+      ...useChatStore.getState().currentSession().modelConfig,
+      ...options.config,
+      model: options.config.model,
+      providerName: options.config.providerName,
     };
 
     let requestPayload: RequestPayload | DalleRequestPayload;
@@ -200,7 +649,7 @@ export class ChatGPTApi implements LLMApi {
       options.config.model.startsWith("o1") ||
       options.config.model.startsWith("o3") ||
       options.config.model.startsWith("o4-mini");
-    const isGpt5 =  options.config.model.startsWith("gpt-5");
+    const isGpt5 = options.config.model.startsWith("gpt-5");
     if (isDalle3) {
       const prompt = getMessageTextContent(
         options.messages.slice(-1)?.pop() as any,
@@ -231,7 +680,7 @@ export class ChatGPTApi implements LLMApi {
         messages,
         stream: options.config.stream,
         model: modelConfig.model,
-        temperature: (!isO1OrO3 && !isGpt5) ? modelConfig.temperature : 1,
+        temperature: !isO1OrO3 && !isGpt5 ? modelConfig.temperature : 1,
         presence_penalty: !isO1OrO3 ? modelConfig.presence_penalty : 0,
         frequency_penalty: !isO1OrO3 ? modelConfig.frequency_penalty : 0,
         top_p: !isO1OrO3 ? modelConfig.top_p : 1,
@@ -240,11 +689,10 @@ export class ChatGPTApi implements LLMApi {
       };
 
       if (isGpt5) {
-  	// Remove max_tokens if present
-  	delete requestPayload.max_tokens;
-  	// Add max_completion_tokens (or max_completion_tokens if that's what you meant)
-  	requestPayload["max_completion_tokens"] = modelConfig.max_tokens;
-
+        // Remove max_tokens if present
+        delete requestPayload.max_tokens;
+        // Add max_completion_tokens (or max_completion_tokens if that's what you meant)
+        requestPayload["max_completion_tokens"] = modelConfig.max_tokens;
       } else if (isO1OrO3) {
         // by default the o1/o3 models will not attempt to produce output that includes markdown formatting
         // manually add "Formatting re-enabled" developer message to encourage markdown inclusion in model responses
@@ -258,14 +706,15 @@ export class ChatGPTApi implements LLMApi {
         requestPayload["max_completion_tokens"] = modelConfig.max_tokens;
       }
 
-
       // add max_tokens to vision model
-      if (visionModel && !isO1OrO3 && ! isGpt5) {
+      if (visionModel && !isO1OrO3 && !isGpt5) {
         requestPayload["max_tokens"] = Math.max(modelConfig.max_tokens, 4000);
       }
     }
 
-    console.log("[Request] openai payload: ", requestPayload);
+    const latestUserText = !isDalle3 ? getLatestUserText(options.messages) : "";
+    const webSearchEnabled =
+      !isDalle3 && shouldEnableBuiltinWebSearch(modelConfig, latestUserText);
 
     const shouldStream = !isDalle3 && !!options.config.stream;
     const controller = new AbortController();
@@ -303,20 +752,69 @@ export class ChatGPTApi implements LLMApi {
           isDalle3 ? OpenaiPath.ImagePath : OpenaiPath.ChatPath,
         );
       }
+
+      let effectiveRequestPayload = requestPayload;
+      let webSearchTools: any[] = [];
+      let webSearchToolFuncs: Record<string, Function> = {};
+
+      if (webSearchEnabled) {
+        const baseRequestPayload = requestPayload as RequestPayload;
+
+        if (shouldStream) {
+          const tools = this.buildWebSearchTools();
+          const toolSupport = await this.resolveToolSupport({
+            chatPath,
+            model: modelConfig.model,
+            controller,
+            tools,
+            isO1OrO3,
+            isGpt5,
+          });
+
+          if (toolSupport) {
+            effectiveRequestPayload = {
+              ...baseRequestPayload,
+              messages: [
+                createWebSearchInstruction(isO1OrO3),
+                ...baseRequestPayload.messages,
+              ],
+            } satisfies RequestPayload;
+            webSearchTools = tools;
+            webSearchToolFuncs = this.createWebSearchToolFuncs({ options });
+          } else {
+            effectiveRequestPayload = await this.buildDecisionSearchPayload({
+              chatPath,
+              controller,
+              model: modelConfig.model,
+              requestPayload: baseRequestPayload,
+              options,
+              isO1OrO3,
+              isGpt5,
+            });
+          }
+        } else {
+          effectiveRequestPayload = await this.buildDecisionSearchPayload({
+            chatPath,
+            controller,
+            model: modelConfig.model,
+            requestPayload: baseRequestPayload,
+            options,
+            isO1OrO3,
+            isGpt5,
+          });
+        }
+      }
+
+      console.log("[Request] openai payload: ", effectiveRequestPayload);
+
       if (shouldStream) {
         let index = -1;
-        const [tools, funcs] = usePluginStore
-          .getState()
-          .getAsTools(
-            useChatStore.getState().currentSession().mask?.plugin || [],
-          );
-        // console.log("getAsTools", tools, funcs);
         streamWithThink(
           chatPath,
-          requestPayload,
+          effectiveRequestPayload,
           getHeaders(),
-          tools as any,
-          funcs,
+          webSearchTools,
+          webSearchToolFuncs,
           controller,
           // parseSSE
           (text: string, runTools: ChatMessageTool[]) => {
@@ -403,21 +901,12 @@ export class ChatGPTApi implements LLMApi {
           options,
         );
       } else {
-        const chatPayload = {
-          method: "POST",
-          body: JSON.stringify(requestPayload),
-          signal: controller.signal,
-          headers: getHeaders(),
-        };
-
-        // make a fetch request
-        const requestTimeoutId = setTimeout(
-          () => controller.abort(),
-          getTimeoutMSByModel(options.config.model),
+        const res = await this.sendChatRequest(
+          chatPath,
+          effectiveRequestPayload,
+          controller,
+          options.config.model,
         );
-
-        const res = await fetch(chatPath, chatPayload);
-        clearTimeout(requestTimeoutId);
 
         const resJson = await res.json();
         const message = await this.extractMessage(resJson);
@@ -495,6 +984,63 @@ export class ChatGPTApi implements LLMApi {
   }
 
   async models(): Promise<LLMModel[]> {
+    const accessStore = useAccessStore.getState();
+    const isCustomOpenAICompatible =
+      accessStore.useCustomConfig &&
+      accessStore.provider === ServiceProvider.OpenAI;
+
+    if (isCustomOpenAICompatible) {
+      if (accessStore.openaiUrl.trim().length === 0) {
+        return [];
+      }
+
+      const res = await fetch(this.path(OpenaiPath.ListModelPath), {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          ...(accessStore.openaiApiKey.trim().length > 0
+            ? {
+                Authorization: `Bearer ${accessStore.openaiApiKey.trim()}`,
+              }
+            : accessStore.accessCode.trim().length > 0 &&
+              accessStore.openaiUrl.trim().includes(ApiPath.OpenAI)
+            ? {
+                Authorization: `Bearer ${ACCESS_CODE_PREFIX}${accessStore.accessCode.trim()}`,
+              }
+            : {}),
+        },
+      });
+
+      if (!res.ok) {
+        throw new Error(`Failed to fetch models: ${res.status}`);
+      }
+
+      const resJson = (await res.json()) as OpenAIListModelResponse;
+      const seenModels = new Set<string>();
+
+      return (resJson.data ?? [])
+        .map((model, index) => ({
+          name: model.id,
+          displayName: model.id,
+          available: true,
+          sorted: index,
+          provider: {
+            id: "openai",
+            providerName: ServiceProvider.OpenAI,
+            providerType: "openai",
+            sorted: 1,
+          },
+        }))
+        .filter((model) => {
+          if (!model.name || seenModels.has(model.name)) {
+            return false;
+          }
+
+          seenModels.add(model.name);
+          return true;
+        });
+    }
+
     if (this.disableListModels) {
       return DEFAULT_MODELS.slice();
     }

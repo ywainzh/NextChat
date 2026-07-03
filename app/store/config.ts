@@ -17,7 +17,7 @@ import {
 import { createPersistStore } from "../utils/store";
 import type { Voice } from "rt-client";
 
-export type ModelType = (typeof DEFAULT_MODELS)[number]["name"];
+export type ModelType = string;
 export type TTSModelType = (typeof DEFAULT_TTS_MODELS)[number];
 export type TTSVoiceType = (typeof DEFAULT_TTS_VOICES)[number];
 export type TTSEngineType = (typeof DEFAULT_TTS_ENGINES)[number];
@@ -57,26 +57,24 @@ export const DEFAULT_CONFIG = {
 
   disablePromptHint: false,
 
-  dontShowMaskSplashScreen: false, // dont show splash screen when create chat
-  hideBuiltinMasks: false, // dont add builtin masks
-
   customModels: "",
   models: DEFAULT_MODELS as any as LLMModel[],
 
   modelConfig: {
-    model: "gpt-4o-mini" as ModelType,
+    model: "" as ModelType,
     providerName: "OpenAI" as ServiceProvider,
+    enableWebSearch: false,
     temperature: 0.5,
     top_p: 1,
     max_tokens: 4000,
     presence_penalty: 0,
     frequency_penalty: 0,
-    sendMemory: true,
+    sendMemory: false,
     historyMessageCount: 4,
     compressMessageLengthThreshold: 1000,
     compressModel: "",
     compressProviderName: "",
-    enableInjectSystemPrompts: true,
+    enableInjectSystemPrompts: false,
     template: config?.template ?? DEFAULT_INPUT_TEMPLATE,
     size: "1024x1024" as ModelSize,
     quality: "standard" as DalleQuality,
@@ -111,6 +109,14 @@ export type ChatConfig = typeof DEFAULT_CONFIG;
 export type ModelConfig = ChatConfig["modelConfig"];
 export type TTSConfig = ChatConfig["ttsConfig"];
 export type RealtimeConfig = ChatConfig["realtimeConfig"];
+
+function applyAlwaysOnDefaults<T extends ChatConfig>(state: T) {
+  state.enableAutoGenerateTitle = true;
+  state.sendPreviewBubble = true;
+  state.enableArtifacts = true;
+  state.enableCodeFold = true;
+  return state;
+}
 
 export function limitNumber(
   x: number,
@@ -195,11 +201,11 @@ export const useAppConfig = createPersistStore(
   }),
   {
     name: StoreKey.Config,
-    version: 4.1,
+    version: 4.2,
 
     merge(persistedState, currentState) {
       const state = persistedState as ChatConfig | undefined;
-      if (!state) return { ...currentState };
+      if (!state) return applyAlwaysOnDefaults({ ...currentState });
       const models = currentState.models.slice();
       state.models.forEach((pModel) => {
         const idx = models.findIndex(
@@ -208,7 +214,7 @@ export const useAppConfig = createPersistStore(
         if (idx !== -1) models[idx] = pModel;
         else models.push(pModel);
       });
-      return { ...currentState, ...state, models: models };
+      return applyAlwaysOnDefaults({ ...currentState, ...state, models: models });
     },
 
     migrate(persistedState, version) {
@@ -221,8 +227,6 @@ export const useAppConfig = createPersistStore(
         state.modelConfig.frequency_penalty = 0;
         state.modelConfig.top_p = 1;
         state.modelConfig.template = DEFAULT_INPUT_TEMPLATE;
-        state.dontShowMaskSplashScreen = false;
-        state.hideBuiltinMasks = false;
       }
 
       if (version < 3.5) {
@@ -255,7 +259,15 @@ export const useAppConfig = createPersistStore(
           DEFAULT_CONFIG.modelConfig.compressProviderName;
       }
 
-      return state as any;
+      if (version < 4.2) {
+        state.modelConfig.enableWebSearch =
+          DEFAULT_CONFIG.modelConfig.enableWebSearch;
+        state.modelConfig.sendMemory = DEFAULT_CONFIG.modelConfig.sendMemory;
+        state.modelConfig.enableInjectSystemPrompts =
+          DEFAULT_CONFIG.modelConfig.enableInjectSystemPrompts;
+      }
+
+      return applyAlwaysOnDefaults(state) as any;
     },
   },
 );

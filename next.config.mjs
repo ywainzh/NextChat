@@ -1,7 +1,9 @@
 import webpack from "webpack";
 
 const mode = process.env.BUILD_MODE ?? "standalone";
+const isDev = process.env.NODE_ENV === "development";
 console.log("[Next] build mode", mode);
+console.log("[Next] dev server", isDev);
 
 const disableChunk = !!process.env.DISABLE_CHUNK || mode === "export";
 console.log("[Next] build with chunk: ", !disableChunk);
@@ -22,11 +24,12 @@ const nextConfig = {
 
     config.resolve.fallback = {
       child_process: false,
+      bufferutil: false,
+      "utf-8-validate": false,
     };
 
     return config;
   },
-  output: mode,
   images: {
     unoptimized: mode === "export",
   },
@@ -34,6 +37,10 @@ const nextConfig = {
     forceSwcTransforms: true,
   },
 };
+
+if (!isDev) {
+  nextConfig.output = mode;
+}
 
 const CorsHeaders = [
   { key: "Access-Control-Allow-Credentials", value: "true" },

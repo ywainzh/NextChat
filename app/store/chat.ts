@@ -22,8 +22,6 @@ import {
   GEMINI_SUMMARIZE_MODEL,
   DEEPSEEK_SUMMARIZE_MODEL,
   KnowledgeCutOffDate,
-  MCP_SYSTEM_TEMPLATE,
-  MCP_TOOLS_TEMPLATE,
   ServiceProvider,
   StoreKey,
   SUMMARIZE_MODEL,
@@ -35,9 +33,7 @@ import { estimateTokenLength } from "../utils/token";
 import { ModelConfig, ModelType, useAppConfig } from "./config";
 import { useAccessStore } from "./access";
 import { collectModelsWithDefaultModel } from "../utils/model";
-import { createEmptyMask, Mask } from "./mask";
-import { executeMcpAction, getAllTools, isMcpEnabled } from "../mcp/actions";
-import { extractMcpJson, isMcpJson } from "../mcp/utils";
+import type { WebSearchTrace } from "../typing/web-search";
 
 const localStorage = safeLocalStorage();
 
@@ -61,6 +57,7 @@ export type ChatMessage = RequestMessage & {
   id: string;
   model?: ModelType;
   tools?: ChatMessageTool[];
+  webSearchTraces?: WebSearchTrace[];
   audio_url?: string;
   isMcpResponse?: boolean;
 };
@@ -92,7 +89,7 @@ export interface ChatSession {
   lastSummarizeIndex: number;
   clearContextIndex?: number;
 
-  mask: Mask;
+  modelConfig: ModelConfig;
 }
 
 export const DEFAULT_TOPIC = Locale.Store.DefaultTopic;
@@ -115,7 +112,7 @@ function createEmptySession(): ChatSession {
     lastUpdate: Date.now(),
     lastSummarizeIndex: 0,
 
-    mask: createEmptyMask(),
+    modelConfig: { ...useAppConfig.getState().modelConfig },
   };
 }
 
@@ -123,6 +120,10 @@ function getSummarizeModel(
   currentModel: string,
   providerName: string,
 ): string[] {
+  if (useAccessStore.getState().isUsingCustomOpenAI()) {
+    return [currentModel, providerName];
+  }
+
   // if it is using gpt-* models, force to use 4o-mini to summarize
   if (currentModel.startsWith("gpt") || currentModel.startsWith("chatgpt")) {
     const configStore = useAppConfig.getState();
@@ -202,32 +203,26 @@ function fillTemplateWith(input: string, modelConfig: ModelConfig) {
   return output;
 }
 
-async function getMcpSystemPrompt(): Promise<string> {
-  const tools = await getAllTools();
-
-  let toolsStr = "";
-
-  tools.forEach((i) => {
-    // error client has no tools
-    if (!i.tools) return;
-
-    toolsStr += MCP_TOOLS_TEMPLATE.replace(
-      "{{ clientId }}",
-      i.clientId,
-    ).replace(
-      "{{ tools }}",
-      i.tools.tools.map((p: object) => JSON.stringify(p, null, 2)).join("\n"),
-    );
-  });
-
-  return MCP_SYSTEM_TEMPLATE.replace("{{ MCP_TOOLS }}", toolsStr);
-}
-
 const DEFAULT_CHAT_STATE = {
   sessions: [createEmptySession()],
   currentSessionIndex: 0,
   lastInput: "",
 };
+
+function normalizeSession(session: any): ChatSession {
+  const normalized = {
+    ...createEmptySession(),
+    ...session,
+    modelConfig: {
+      ...useAppConfig.getState().modelConfig,
+      ...(session?.modelConfig ?? session?.mask?.modelConfig ?? {}),
+    },
+  } as ChatSession;
+
+  delete (normalized as any).mask;
+
+  return normalized;
+}
 
 export const useChatStore = createPersistStore(
   DEFAULT_CHAT_STATE,
@@ -253,12 +248,7 @@ export const useChatStore = createPersistStore(
           ...msg,
           id: nanoid(), // 生成新的消息 ID
         }));
-        newSession.mask = {
-          ...currentSession.mask,
-          modelConfig: {
-            ...currentSession.mask.modelConfig,
-          },
-        };
+        newSession.modelConfig = { ...currentSession.modelConfig };
 
         set((state) => ({
           currentSessionIndex: 0,
@@ -304,22 +294,8 @@ export const useChatStore = createPersistStore(
         });
       },
 
-      newSession(mask?: Mask) {
+      newSession() {
         const session = createEmptySession();
-
-        if (mask) {
-          const config = useAppConfig.getState();
-          const globalModelConfig = config.modelConfig;
-
-          session.mask = {
-            ...mask,
-            modelConfig: {
-              ...globalModelConfig,
-              ...mask.modelConfig,
-            },
-          };
-          session.topic = mask.name;
-        }
 
         set((state) => ({
           currentSessionIndex: 0,
@@ -399,25 +375,24 @@ export const useChatStore = createPersistStore(
 
         get().updateStat(message, targetSession);
 
-        get().checkMcpJson(message);
-
         get().summarizeSession(false, targetSession);
       },
 
-      async onUserInput(
-        content: string,
-        attachImages?: string[],
-        isMcpResponse?: boolean,
-      ) {
+      async onUserInput(content: string, attachImages?: string[]) {
         const session = get().currentSession();
-        const modelConfig = session.mask.modelConfig;
+        const modelConfig = session.modelConfig;
 
-        // MCP Response no need to fill template
-        let mContent: string | MultimodalContent[] = isMcpResponse
-          ? content
-          : fillTemplateWith(content, modelConfig);
+        if (modelConfig.model.trim().length === 0) {
+          showToast(Locale.Settings.ModelRequired);
+          return;
+        }
 
-        if (!isMcpResponse && attachImages && attachImages.length > 0) {
+        let mContent: string | MultimodalContent[] = fillTemplateWith(
+          content,
+          modelConfig,
+        );
+
+        if (attachImages && attachImages.length > 0) {
           mContent = [
             ...(content ? [{ type: "text" as const, text: content }] : []),
             ...attachImages.map((url) => ({
@@ -430,7 +405,6 @@ export const useChatStore = createPersistStore(
         let userMessage: ChatMessage = createMessage({
           role: "user",
           content: mContent,
-          isMcpResponse,
         });
 
         const botMessage: ChatMessage = createMessage({
@@ -495,6 +469,14 @@ export const useChatStore = createPersistStore(
               session.messages = session.messages.concat();
             });
           },
+          onWebSearchTrace(trace) {
+            (botMessage.webSearchTraces = botMessage.webSearchTraces || []).push(
+              trace,
+            );
+            get().updateTargetSession(session, (session) => {
+              session.messages = session.messages.concat();
+            });
+          },
           onError(error) {
             const isAborted = error.message?.includes?.("aborted");
             botMessage.content +=
@@ -541,22 +523,16 @@ export const useChatStore = createPersistStore(
 
       async getMessagesWithMemory() {
         const session = get().currentSession();
-        const modelConfig = session.mask.modelConfig;
+        const modelConfig = session.modelConfig;
         const clearContextIndex = session.clearContextIndex ?? 0;
         const messages = session.messages.slice();
         const totalMessageCount = session.messages.length;
 
-        // in-context prompts
-        const contextPrompts = session.mask.context.slice();
-
         // system prompts, to get close to OpenAI Web ChatGPT
         const shouldInjectSystemPrompts =
           modelConfig.enableInjectSystemPrompts &&
-          (session.mask.modelConfig.model.startsWith("gpt-") ||
-            session.mask.modelConfig.model.startsWith("chatgpt-"));
-
-        const mcpEnabled = await isMcpEnabled();
-        const mcpSystemPrompt = mcpEnabled ? await getMcpSystemPrompt() : "";
+          (modelConfig.model.startsWith("gpt-") ||
+            modelConfig.model.startsWith("chatgpt-"));
 
         var systemPrompts: ChatMessage[] = [];
 
@@ -564,23 +540,15 @@ export const useChatStore = createPersistStore(
           systemPrompts = [
             createMessage({
               role: "system",
-              content:
-                fillTemplateWith("", {
-                  ...modelConfig,
-                  template: DEFAULT_SYSTEM_TEMPLATE,
-                }) + mcpSystemPrompt,
-            }),
-          ];
-        } else if (mcpEnabled) {
-          systemPrompts = [
-            createMessage({
-              role: "system",
-              content: mcpSystemPrompt,
+              content: fillTemplateWith("", {
+                ...modelConfig,
+                template: DEFAULT_SYSTEM_TEMPLATE,
+              }),
             }),
           ];
         }
 
-        if (shouldInjectSystemPrompts || mcpEnabled) {
+        if (shouldInjectSystemPrompts) {
           console.log(
             "[Global System Prompt] ",
             systemPrompts.at(0)?.content ?? "empty",
@@ -603,12 +571,11 @@ export const useChatStore = createPersistStore(
           totalMessageCount - modelConfig.historyMessageCount,
         );
 
-        // lets concat send messages, including 4 parts:
+        // lets concat send messages, including 3 parts:
         // 0. system prompt: to get close to OpenAI Web ChatGPT
         // 1. long term memory: summarized memory messages
-        // 2. pre-defined in-context prompts
-        // 3. short term memory: latest n messages
-        // 4. newest input message
+        // 2. short term memory: latest n messages
+        // 3. newest input message
         const memoryStartIndex = shouldSendLongTermMemory
           ? Math.min(longTermMemoryStartIndex, shortTermMemoryStartIndex)
           : shortTermMemoryStartIndex;
@@ -632,7 +599,6 @@ export const useChatStore = createPersistStore(
         const recentMessages = [
           ...systemPrompts,
           ...longTermMemoryPrompts,
-          ...contextPrompts,
           ...reversedRecentMessages.reverse(),
         ];
 
@@ -664,7 +630,12 @@ export const useChatStore = createPersistStore(
       ) {
         const config = useAppConfig.getState();
         const session = targetSession;
-        const modelConfig = session.mask.modelConfig;
+        const modelConfig = session.modelConfig;
+
+        if (modelConfig.model.trim().length === 0) {
+          return;
+        }
+
         // skip summarize when using dalle3?
         if (isDalle3(modelConfig.model)) {
           return;
@@ -674,8 +645,8 @@ export const useChatStore = createPersistStore(
         const [model, providerName] = modelConfig.compressModel
           ? [modelConfig.compressModel, modelConfig.compressProviderName]
           : getSummarizeModel(
-              session.mask.modelConfig.model,
-              session.mask.modelConfig.providerName,
+              modelConfig.model,
+              modelConfig.providerName,
             );
         const api: ClientApi = getClientApi(providerName as ServiceProvider);
 
@@ -685,8 +656,7 @@ export const useChatStore = createPersistStore(
         // should summarize topic after chating more than 50 words
         const SUMMARIZE_MIN_LEN = 50;
         if (
-          (config.enableAutoGenerateTitle &&
-            session.topic === DEFAULT_TOPIC &&
+          (session.topic === DEFAULT_TOPIC &&
             countMessages(messages) >= SUMMARIZE_MIN_LEN) ||
           refreshTitle
         ) {
@@ -711,6 +681,7 @@ export const useChatStore = createPersistStore(
               model,
               stream: false,
               providerName,
+              enableWebSearch: false,
             },
             onFinish(message, responseRes) {
               if (responseRes?.status === 200) {
@@ -776,6 +747,7 @@ export const useChatStore = createPersistStore(
               stream: true,
               model,
               providerName,
+              enableWebSearch: false,
             },
             onUpdate(message) {
               session.memoryPrompt = message;
@@ -822,45 +794,13 @@ export const useChatStore = createPersistStore(
           lastInput,
         });
       },
-
-      /** check if the message contains MCP JSON and execute the MCP action */
-      checkMcpJson(message: ChatMessage) {
-        const mcpEnabled = isMcpEnabled();
-        if (!mcpEnabled) return;
-        const content = getMessageTextContent(message);
-        if (isMcpJson(content)) {
-          try {
-            const mcpRequest = extractMcpJson(content);
-            if (mcpRequest) {
-              console.debug("[MCP Request]", mcpRequest);
-
-              executeMcpAction(mcpRequest.clientId, mcpRequest.mcp)
-                .then((result) => {
-                  console.log("[MCP Response]", result);
-                  const mcpResponse =
-                    typeof result === "object"
-                      ? JSON.stringify(result)
-                      : String(result);
-                  get().onUserInput(
-                    `\`\`\`json:mcp-response:${mcpRequest.clientId}\n${mcpResponse}\n\`\`\``,
-                    [],
-                    true,
-                  );
-                })
-                .catch((error) => showToast("MCP execution failed", error));
-            }
-          } catch (error) {
-            console.error("[Check MCP JSON]", error);
-          }
-        }
-      },
     };
 
     return methods;
   },
   {
     name: StoreKey.Chat,
-    version: 3.3,
+    version: 4.1,
     migrate(persistedState, version) {
       const state = persistedState as any;
       const newState = JSON.parse(
@@ -875,9 +815,9 @@ export const useChatStore = createPersistStore(
           const newSession = createEmptySession();
           newSession.topic = oldSession.topic;
           newSession.messages = [...oldSession.messages];
-          newSession.mask.modelConfig.sendMemory = true;
-          newSession.mask.modelConfig.historyMessageCount = 4;
-          newSession.mask.modelConfig.compressMessageLengthThreshold = 1000;
+          newSession.modelConfig.sendMemory = true;
+          newSession.modelConfig.historyMessageCount = 4;
+          newSession.modelConfig.compressMessageLengthThreshold = 1000;
           newState.sessions.push(newSession);
         }
       }
@@ -896,12 +836,17 @@ export const useChatStore = createPersistStore(
         newState.sessions.forEach((s) => {
           if (
             // Exclude those already set by user
-            !s.mask.modelConfig.hasOwnProperty("enableInjectSystemPrompts")
+            !(
+              s.modelConfig ??
+              (s as any).mask?.modelConfig ??
+              {}
+            ).hasOwnProperty("enableInjectSystemPrompts")
           ) {
             // Because users may have changed this configuration,
             // the user's current configuration is used instead of the default
             const config = useAppConfig.getState();
-            s.mask.modelConfig.enableInjectSystemPrompts =
+            s.modelConfig = s.modelConfig ?? (s as any).mask?.modelConfig;
+            s.modelConfig.enableInjectSystemPrompts =
               config.modelConfig.enableInjectSystemPrompts;
           }
         });
@@ -911,17 +856,28 @@ export const useChatStore = createPersistStore(
       if (version < 3.2) {
         newState.sessions.forEach((s) => {
           const config = useAppConfig.getState();
-          s.mask.modelConfig.compressModel = config.modelConfig.compressModel;
-          s.mask.modelConfig.compressProviderName =
+          s.modelConfig = s.modelConfig ?? (s as any).mask?.modelConfig;
+          s.modelConfig.compressModel = config.modelConfig.compressModel;
+          s.modelConfig.compressProviderName =
             config.modelConfig.compressProviderName;
         });
       }
       // revert default summarize model for every session
       if (version < 3.3) {
         newState.sessions.forEach((s) => {
-          const config = useAppConfig.getState();
-          s.mask.modelConfig.compressModel = "";
-          s.mask.modelConfig.compressProviderName = "";
+          s.modelConfig = s.modelConfig ?? (s as any).mask?.modelConfig;
+          s.modelConfig.compressModel = "";
+          s.modelConfig.compressProviderName = "";
+        });
+      }
+
+      newState.sessions = newState.sessions.map(normalizeSession);
+
+      if (version < 4.1) {
+        newState.sessions.forEach((s) => {
+          s.modelConfig.enableWebSearch = false;
+          s.modelConfig.sendMemory = false;
+          s.modelConfig.enableInjectSystemPrompts = false;
         });
       }
 

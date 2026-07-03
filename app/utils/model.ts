@@ -22,6 +22,46 @@ const customProvider = (providerName: string) => ({
   sorted: CustomSeq.next(providerName),
 });
 
+const preferredModelFamilyMatchers: Array<(modelName: string) => boolean> = [
+  (modelName) =>
+    /\bchatgpt\b/.test(modelName) ||
+    /\bgpt[\w.-]*/.test(modelName) ||
+    /\bo[1-9][\w.-]*/.test(modelName),
+  (modelName) => /\bclaude\b/.test(modelName) || /\banthropic\b/.test(modelName),
+  (modelName) => /\bgrok\b/.test(modelName) || /\bxai\b/.test(modelName),
+  (modelName) => /\bdeep[\s-]?seek\b/.test(modelName) || /\bdeepseek\b/.test(modelName),
+  (modelName) => /\bgemin\w*\b/.test(modelName) || /\bgoogle\b/.test(modelName),
+  (modelName) => /\bchatglm\b/.test(modelName) || /\bglm\b/.test(modelName),
+  (modelName) => /\bqwen\b/.test(modelName) || /\bqwq\b/.test(modelName) || /\bqvq\b/.test(modelName),
+];
+
+function normalizeModelNameForSort(modelName: string) {
+  return modelName
+    .toLowerCase()
+    .replace(/[_/]+/g, "-")
+    .replace(/[()]/g, " ");
+}
+
+function getPreferredModelFamilyRank(modelName: string) {
+  const normalizedName = normalizeModelNameForSort(modelName);
+  const rank = preferredModelFamilyMatchers.findIndex((matcher) =>
+    matcher(normalizedName),
+  );
+
+  return rank === -1 ? preferredModelFamilyMatchers.length : rank;
+}
+
+function sortModelsByPreferredFamily<T extends { name: string; displayName?: string; sorted: number }>(
+  models: T[],
+) {
+  return models.sort((a, b) => {
+    const aRank = getPreferredModelFamilyRank(`${a.displayName ?? ""} ${a.name}`);
+    const bRank = getPreferredModelFamilyRank(`${b.displayName ?? ""} ${b.name}`);
+
+    return aRank === bRank ? a.sorted - b.sorted : aRank - bRank;
+  });
+}
+
 /**
  * Sorts an array of models based on specified rules.
  *
@@ -191,6 +231,24 @@ export function collectModelsWithDefaultModel(
   allModels = sortModelTable(allModels);
 
   return allModels;
+}
+
+export function createOpenAICompatibleModels(modelIds: string[]) {
+  return sortModelsByPreferredFamily(
+    modelIds.map((modelId, index) => ({
+      name: modelId,
+      displayName: modelId,
+      available: true,
+      isDefault: false,
+      sorted: index,
+      provider: {
+        id: "openai",
+        providerName: ServiceProvider.OpenAI,
+        providerType: "openai",
+        sorted: 1,
+      },
+    })),
+  );
 }
 
 export function isModelAvailableInServer(

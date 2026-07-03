@@ -34,7 +34,7 @@ import {
 } from "@/app/components/ui-lib";
 import { removeImage } from "@/app/utils/chat";
 import { SideBar } from "./sd-sidebar";
-import { WindowContent } from "@/app/components/home";
+import { WindowContent } from "@/app/components/home-shell";
 import { params } from "./sd-panel";
 import clsx from "clsx";
 

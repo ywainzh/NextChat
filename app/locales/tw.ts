@@ -76,7 +76,8 @@ const tw = {
       Masks: "所有角色範本",
       Clear: "清除聊天",
       Settings: "對話設定",
-      UploadImage: "上傳圖片",
+      UploadImage: "上傳檔案",
+      WebSearch: "聯網",
     },
     Rename: "重新命名對話",
     Typing: "正在輸入…",
@@ -329,6 +330,13 @@ const tw = {
         Endpoint: {
           Title: "API 端點 (Endpoint) 位址",
           SubTitle: "除預設位址外，必須包含 http(s)://",
+        },
+      },
+      Tavily: {
+        ApiKey: {
+          Title: "Tavily Key",
+          SubTitle: "用於聯網搜尋，留空時使用伺服器環境變數或 Bing 備用",
+          Placeholder: "tvly-...",
         },
       },
       Azure: {

@@ -11,7 +11,6 @@ import {
   useAppConfig,
   useChatStore,
   ChatMessageTool,
-  usePluginStore,
 } from "@/app/store";
 import { preProcessImageContent, streamWithThink } from "@/app/utils/chat";
 import {
@@ -98,7 +97,7 @@ export class SiliconflowApi implements LLMApi {
 
     const modelConfig = {
       ...useAppConfig.getState().modelConfig,
-      ...useChatStore.getState().currentSession().mask.modelConfig,
+      ...useChatStore.getState().currentSession().modelConfig,
       ...{
         model: options.config.model,
         providerName: options.config.providerName,
@@ -141,17 +140,12 @@ export class SiliconflowApi implements LLMApi {
       );
 
       if (shouldStream) {
-        const [tools, funcs] = usePluginStore
-          .getState()
-          .getAsTools(
-            useChatStore.getState().currentSession().mask?.plugin || [],
-          );
         return streamWithThink(
           chatPath,
           requestPayload,
           getHeaders(),
-          tools as any,
-          funcs,
+          [],
+          {},
           controller,
           // parseSSE
           (text: string, runTools: ChatMessageTool[]) => {

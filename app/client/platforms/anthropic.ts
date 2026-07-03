@@ -4,7 +4,6 @@ import {
   useAccessStore,
   useAppConfig,
   useChatStore,
-  usePluginStore,
   ChatMessageTool,
 } from "@/app/store";
 import { getClientConfig } from "@/app/config/client";
@@ -92,7 +91,7 @@ export class ClaudeApi implements LLMApi {
 
     const modelConfig = {
       ...useAppConfig.getState().modelConfig,
-      ...useChatStore.getState().currentSession().mask.modelConfig,
+      ...useChatStore.getState().currentSession().modelConfig,
       ...{
         model: options.config.model,
       },
@@ -198,11 +197,6 @@ export class ClaudeApi implements LLMApi {
 
     if (shouldStream) {
       let index = -1;
-      const [tools, funcs] = usePluginStore
-        .getState()
-        .getAsTools(
-          useChatStore.getState().currentSession().mask?.plugin || [],
-        );
       return stream(
         path,
         requestBody,
@@ -210,13 +204,8 @@ export class ClaudeApi implements LLMApi {
           ...getHeaders(),
           "anthropic-version": accessStore.anthropicApiVersion,
         },
-        // @ts-ignore
-        tools.map((tool) => ({
-          name: tool?.function?.name,
-          description: tool?.function?.description,
-          input_schema: tool?.function?.parameters,
-        })),
-        funcs,
+        [],
+        {},
         controller,
         // parseSSE
         (text: string, runTools: ChatMessageTool[]) => {

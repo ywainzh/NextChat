@@ -25,6 +25,7 @@ import { XAIApi } from "./platforms/xai";
 import { ChatGLMApi } from "./platforms/glm";
 import { SiliconflowApi } from "./platforms/siliconflow";
 import { Ai302Api } from "./platforms/ai302";
+import type { WebSearchTrace } from "../typing/web-search";
 
 export const ROLES = ["system", "user", "assistant"] as const;
 export type MessageRole = (typeof ROLES)[number];
@@ -54,6 +55,7 @@ export interface RequestMessage {
 export interface LLMConfig {
   model: string;
   providerName?: string;
+  enableWebSearch?: boolean;
   temperature?: number;
   top_p?: number;
   stream?: boolean;
@@ -83,6 +85,7 @@ export interface ChatOptions {
   onController?: (controller: AbortController) => void;
   onBeforeTool?: (tool: ChatMessageTool) => void;
   onAfterTool?: (tool: ChatMessageTool) => void;
+  onWebSearchTrace?: (trace: WebSearchTrace) => void;
 }
 
 export interface LLMUsage {
@@ -255,7 +258,7 @@ export function getHeaders(ignoreHeaders: boolean = false) {
   const clientConfig = getClientConfig();
 
   function getConfig() {
-    const modelConfig = chatStore.currentSession().mask.modelConfig;
+    const modelConfig = chatStore.currentSession().modelConfig;
     const isGoogle = modelConfig.providerName === ServiceProvider.Google;
     const isAzure = modelConfig.providerName === ServiceProvider.Azure;
     const isAnthropic = modelConfig.providerName === ServiceProvider.Anthropic;

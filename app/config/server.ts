@@ -92,10 +92,10 @@ declare global {
       AI302_URL?: string;
       AI302_API_KEY?: string;
 
+      TAVILY_API_KEY?: string;
+
       // custom template for preprocessing user input
       DEFAULT_INPUT_TEMPLATE?: string;
-
-      ENABLE_MCP?: string; // enable mcp functionality
     }
   }
 }
@@ -122,7 +122,7 @@ function getApiKey(keys?: string) {
     console.log(
       `[Server Config] using ${randomIndex + 1} of ${
         apiKeys.length
-      } api key - ${apiKey}`,
+      } api key - REDACTED`,
     );
   }
 
@@ -255,6 +255,8 @@ export const getServerSideConfig = () => {
     ai302Url: process.env.AI302_URL,
     ai302ApiKey: getApiKey(process.env.AI302_API_KEY),
 
+    tavilyApiKey: getApiKey(process.env.TAVILY_API_KEY),
+
     gtmId: process.env.GTM_ID,
     gaId: process.env.GA_ID || DEFAULT_GA_ID,
 
@@ -273,6 +275,5 @@ export const getServerSideConfig = () => {
     defaultModel,
     visionModels,
     allowedWebDavEndpoints,
-    enableMcp: process.env.ENABLE_MCP === "true",
   };
 };

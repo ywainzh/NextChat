@@ -221,7 +221,7 @@ export function stream(
 
   const finish = () => {
     if (!finished) {
-      if (!running && runTools.length > 0) {
+      if (!running && tools?.length > 0 && runTools.length > 0) {
         const toolCallMessage = {
           role: "assistant",
           tool_calls: [...runTools],
@@ -419,6 +419,16 @@ export function streamWithThink(
   let isInThinkingMode = false;
   let lastIsThinking = false;
   let lastIsThinkingTagged = false; //between <think> and </think> tags
+  let retriedWithFallback = false;
+
+  function resetStreamState() {
+    responseText = "";
+    remainText = "";
+    runTools = [];
+    isInThinkingMode = false;
+    lastIsThinking = false;
+    lastIsThinkingTagged = false;
+  }
 
   // animate response to make it looks smooth
   function animateResponseText() {
@@ -447,7 +457,7 @@ export function streamWithThink(
 
   const finish = () => {
     if (!finished) {
-      if (!running && runTools.length > 0) {
+      if (!running && tools?.length > 0 && runTools.length > 0) {
         const toolCallMessage = {
           role: "assistant",
           tool_calls: [...runTools],
@@ -528,6 +538,7 @@ export function streamWithThink(
     headers: any,
     requestPayload: any,
     tools: any,
+    isFallbackRequest: boolean = false,
   ) {
     const chatPayload = {
       method: "POST",
@@ -552,7 +563,29 @@ export function streamWithThink(
         responseRes = res;
 
         if (contentType?.startsWith("text/plain")) {
-          responseText = await res.clone().text();
+          const plainText = await res.clone().text();
+          if (
+            !isFallbackRequest &&
+            !retriedWithFallback &&
+            options?.requestFallback?.payload &&
+            options?.requestFallback?.shouldRetry?.(
+              res.status,
+              plainText,
+              contentType,
+            )
+          ) {
+            retriedWithFallback = true;
+            options?.requestFallback?.onRetry?.();
+            resetStreamState();
+            return chatApi(
+              chatPath,
+              headers,
+              options.requestFallback.payload,
+              tools,
+              true,
+            );
+          }
+          responseText = plainText;
           return finish();
         }
 
@@ -570,6 +603,28 @@ export function streamWithThink(
             extraInfo = prettyObject(resJson);
           } catch {}
 
+          if (
+            !isFallbackRequest &&
+            !retriedWithFallback &&
+            options?.requestFallback?.payload &&
+            options?.requestFallback?.shouldRetry?.(
+              res.status,
+              extraInfo,
+              contentType,
+            )
+          ) {
+            retriedWithFallback = true;
+            options?.requestFallback?.onRetry?.();
+            resetStreamState();
+            return chatApi(
+              chatPath,
+              headers,
+              options.requestFallback.payload,
+              tools,
+              true,
+            );
+          }
+
           if (res.status === 401) {
             responseTexts.push(Locale.Error.Unauthorized);
           }
@@ -581,6 +636,10 @@ export function streamWithThink(
           responseText = responseTexts.join("\n\n");
 
           return finish();
+        }
+
+        if (!isFallbackRequest) {
+          options?.requestFallback?.onSuccess?.();
         }
       },
       onmessage(msg) {

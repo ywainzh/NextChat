@@ -80,10 +80,21 @@ const cn = {
       Masks: "所有面具",
       Clear: "清除聊天",
       Settings: "对话设置",
-      UploadImage: "上传图片",
+      UploadImage: "上传文件",
+      WebSearch: "联网",
     },
     Rename: "重命名对话",
     Typing: "正在输入…",
+    WebSearch: {
+      Summary: (count: number) => `已联网搜索 · ${count} 个来源`,
+      Failed: "本次未完整获取联网结果",
+      Fallback: "本次未获取到联网结果，已按普通对话处理",
+      Empty: "已执行联网搜索，但没有找到可用来源",
+      Mode: {
+        Tool: "模型自主搜索",
+        Decision: "判定后搜索",
+      },
+    },
     Input: (submitKey: string) => {
       var inputHints = `${submitKey} 发送`;
       if (submitKey === String(SubmitKey.Enter)) {
@@ -259,7 +270,7 @@ const cn = {
 
       LocalState: "本地数据",
       Overview: (overview: any) => {
-        return `${overview.chat} 次对话，${overview.message} 条消息，${overview.prompt} 条提示词，${overview.mask} 个面具`;
+        return `${overview.chat} 次对话，${overview.message} 条消息，${overview.prompt} 条提示词`;
       },
       ImportFailed: "导入失败",
     },
@@ -340,7 +351,23 @@ const cn = {
 
         Endpoint: {
           Title: "接口地址",
-          SubTitle: "除默认地址外，必须包含 http(s)://",
+          SubTitle: "填写 OpenAI 兼容接口地址，本地代理可使用 /api/openai",
+        },
+        SyncModel: {
+          Title: "同步模型",
+          Action: "刷新模型",
+          Loading: "正在从接口同步支持模型",
+          EmptyEndpoint: "未填写接口地址，当前没有可用模型",
+          EmptyResult: "接口未返回任何模型",
+          Failed: "同步模型失败",
+          Success: (count: number) => `已同步 ${count} 个模型`,
+        },
+      },
+      Tavily: {
+        ApiKey: {
+          Title: "Tavily Key",
+          SubTitle: "用于联网搜索，留空时使用服务器环境变量或 Bing 兜底",
+          Placeholder: "tvly-...",
         },
       },
       Azure: {
@@ -552,6 +579,9 @@ const cn = {
     },
 
     Model: "模型 (model)",
+    EmptyModel: "暂无可用模型",
+    SelectModel: "请选择模型",
+    ModelRequired: "请先同步并选择模型",
     CompressModel: {
       Title: "对话摘要模型",
       SubTitle: "用于压缩历史记录、生成对话标题的模型",

@@ -19,7 +19,7 @@ import Locale from "../locales";
 import { Modal, showToast } from "./ui-lib";
 import { copyToClipboard, downloadAs } from "../utils";
 import { Path, ApiPath, REPO_URL } from "@/app/constant";
-import { Loading } from "./home";
+import { Loading } from "./home-shell";
 import styles from "./artifacts.module.scss";
 
 type HTMLPreviewProps = {

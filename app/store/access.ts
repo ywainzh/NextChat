@@ -1,9 +1,10 @@
 import {
+  ACCESS_CODE_PREFIX,
   GoogleSafetySettingsThreshold,
   ServiceProvider,
   StoreKey,
   ApiPath,
-  OPENAI_BASE_URL,
+  OpenaiPath,
   ANTHROPIC_BASE_URL,
   GEMINI_BASE_URL,
   BAIDU_BASE_URL,
@@ -23,14 +24,12 @@ import { getHeaders } from "../client/api";
 import { getClientConfig } from "../config/client";
 import { createPersistStore } from "../utils/store";
 import { ensure } from "../utils/clone";
-import { DEFAULT_CONFIG } from "./config";
-import { getModelProvider } from "../utils/model";
 
 let fetchState = 0; // 0 not fetch, 1 fetching, 2 done
 
 const isApp = getClientConfig()?.buildMode === "export";
 
-const DEFAULT_OPENAI_URL = isApp ? OPENAI_BASE_URL : ApiPath.OpenAI;
+const DEFAULT_OPENAI_URL = "";
 
 const DEFAULT_GOOGLE_URL = isApp ? GEMINI_BASE_URL : ApiPath.Google;
 
@@ -64,7 +63,7 @@ const DEFAULT_AI302_URL = isApp ? AI302_BASE_URL : ApiPath["302.AI"];
 
 const DEFAULT_ACCESS_STATE = {
   accessCode: "",
-  useCustomConfig: false,
+  useCustomConfig: true,
 
   provider: ServiceProvider.OpenAI,
 
@@ -148,10 +147,59 @@ const DEFAULT_ACCESS_STATE = {
   customModels: "",
   defaultModel: "",
   visionModels: "",
+  openAICompatibleModelIds: [] as string[],
+  openAICompatibleModelsState: "idle" as "idle" | "loading" | "ready" | "error",
+  openAICompatibleModelsError: "",
+  tavilyApiKey: "",
 
   // tts config
   edgeTTSVoiceName: "zh-CN-YunxiNeural",
 };
+
+function buildOpenAICompatibleEndpoint(baseUrl: string) {
+  const trimmedBaseUrl = baseUrl.trim();
+
+  if (trimmedBaseUrl.length === 0) {
+    return "";
+  }
+
+  let normalizedBaseUrl = trimmedBaseUrl.endsWith("/")
+    ? trimmedBaseUrl.slice(0, trimmedBaseUrl.length - 1)
+    : trimmedBaseUrl;
+
+  if (
+    !normalizedBaseUrl.startsWith("http") &&
+    !normalizedBaseUrl.startsWith(ApiPath.OpenAI)
+  ) {
+    normalizedBaseUrl = "https://" + normalizedBaseUrl;
+  }
+
+  return `${normalizedBaseUrl}/${OpenaiPath.ListModelPath}`;
+}
+
+function buildOpenAICompatibleHeaders(
+  openaiUrl: string,
+  apiKey: string,
+  accessCode: string,
+) {
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+  };
+
+  const trimmedApiKey = apiKey.trim();
+  const trimmedAccessCode = accessCode.trim();
+
+  if (trimmedApiKey.length > 0) {
+    headers.Authorization = `Bearer ${trimmedApiKey}`;
+  } else if (
+    trimmedAccessCode.length > 0 &&
+    openaiUrl.trim().includes(ApiPath.OpenAI)
+  ) {
+    headers.Authorization = `Bearer ${ACCESS_CODE_PREFIX}${trimmedAccessCode}`;
+  }
+
+  return headers;
+}
 
 export const useAccessStore = createPersistStore(
   { ...DEFAULT_ACCESS_STATE },
@@ -170,6 +218,102 @@ export const useAccessStore = createPersistStore(
       this.fetch();
 
       return get().edgeTTSVoiceName;
+    },
+
+    isUsingCustomOpenAI() {
+      return get().useCustomConfig && get().provider === ServiceProvider.OpenAI;
+    },
+
+    setOpenAICompatibleModels(modelIds: string[]) {
+      set(() => ({
+        openAICompatibleModelIds: modelIds,
+        openAICompatibleModelsState: "ready",
+        openAICompatibleModelsError: "",
+      }));
+    },
+
+    setOpenAICompatibleModelsState(
+      status: "idle" | "loading" | "ready" | "error",
+      error = "",
+    ) {
+      set(() => ({
+        openAICompatibleModelsState: status,
+        openAICompatibleModelsError: error,
+      }));
+    },
+
+    clearOpenAICompatibleModels(
+      status: "idle" | "loading" | "ready" | "error" = "idle",
+      error = "",
+    ) {
+      set(() => ({
+        openAICompatibleModelIds: [],
+        openAICompatibleModelsState: status,
+        openAICompatibleModelsError: error,
+      }));
+    },
+
+    async fetchOpenAICompatibleModels() {
+      if (!this.isUsingCustomOpenAI()) {
+        this.clearOpenAICompatibleModels();
+        return [];
+      }
+
+      const endpoint = buildOpenAICompatibleEndpoint(get().openaiUrl);
+
+      if (endpoint.length === 0) {
+        this.clearOpenAICompatibleModels();
+        return [];
+      }
+
+      this.setOpenAICompatibleModelsState("loading");
+
+      try {
+        const response = await fetch(endpoint, {
+          method: "GET",
+          headers: buildOpenAICompatibleHeaders(
+            get().openaiUrl,
+            get().openaiApiKey,
+            get().accessCode,
+          ),
+        });
+
+        if (!response.ok) {
+          let errorMessage = `${response.status} ${response.statusText}`;
+          try {
+            const errorJson = await response.json();
+            errorMessage =
+              errorJson?.error?.message ?? errorJson?.message ?? errorMessage;
+          } catch {
+            // ignore parse error and use fallback message
+          }
+
+          throw new Error(errorMessage);
+        }
+
+        const responseJson = await response.json();
+        const modelIds: string[] = Array.isArray(responseJson?.data)
+          ? Array.from(
+              new Set(
+                responseJson.data
+                  .map((model: { id?: string }) => model?.id?.trim?.())
+                  .filter(
+                    (modelId: string | undefined): modelId is string =>
+                      !!modelId,
+                  ),
+              ),
+            )
+          : [];
+
+        this.setOpenAICompatibleModels(modelIds);
+
+        return modelIds;
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Failed to sync models";
+        this.clearOpenAICompatibleModels("error", message);
+        throw error;
+      }
     },
 
     isValidOpenAI() {
@@ -260,16 +404,6 @@ export const useAccessStore = createPersistStore(
         },
       })
         .then((res) => res.json())
-        .then((res) => {
-          const defaultModel = res.defaultModel ?? "";
-          if (defaultModel !== "") {
-            const [model, providerName] = getModelProvider(defaultModel);
-            DEFAULT_CONFIG.modelConfig.model = model;
-            DEFAULT_CONFIG.modelConfig.providerName = providerName as any;
-          }
-
-          return res;
-        })
         .then((res: DangerConfig) => {
           console.log("[Config] got config from server", res);
           set(() => ({ ...res }));
@@ -284,7 +418,7 @@ export const useAccessStore = createPersistStore(
   }),
   {
     name: StoreKey.Access,
-    version: 2,
+    version: 4,
     migrate(persistedState, version) {
       if (version < 2) {
         const state = persistedState as {
@@ -295,6 +429,22 @@ export const useAccessStore = createPersistStore(
         };
         state.openaiApiKey = state.token;
         state.azureApiVersion = "2023-08-01-preview";
+      }
+
+      if (version < 3) {
+        const state = persistedState as typeof DEFAULT_ACCESS_STATE;
+        state.useCustomConfig = true;
+        state.openaiUrl = state.openaiUrl ?? DEFAULT_OPENAI_URL;
+        state.openAICompatibleModelIds = state.openAICompatibleModelIds ?? [];
+        state.openAICompatibleModelsState =
+          state.openAICompatibleModelsState ?? "idle";
+        state.openAICompatibleModelsError =
+          state.openAICompatibleModelsError ?? "";
+      }
+
+      if (version < 4) {
+        const state = persistedState as typeof DEFAULT_ACCESS_STATE;
+        state.tavilyApiKey = state.tavilyApiKey ?? "";
       }
 
       return persistedState as any;

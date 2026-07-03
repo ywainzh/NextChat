@@ -6,7 +6,6 @@ type Command = (param: string) => void;
 interface Commands {
   fill?: Command;
   submit?: Command;
-  mask?: Command;
   code?: Command;
   settings?: Command;
 }
@@ -34,7 +33,6 @@ export function useCommand(commands: Commands = {}) {
 
 interface ChatCommands {
   new?: Command;
-  newm?: Command;
   next?: Command;
   prev?: Command;
   clear?: Command;

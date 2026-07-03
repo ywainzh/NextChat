@@ -57,11 +57,13 @@ export function ListItem(props: {
   children?: JSX.Element | JSX.Element[];
   icon?: JSX.Element;
   className?: string;
+  elementRef?: React.Ref<HTMLDivElement>;
   onClick?: (e: MouseEvent) => void;
   vertical?: boolean;
 }) {
   return (
     <div
+      ref={props.elementRef}
       className={clsx(
         styles["list-item"],
         {
@@ -486,6 +488,7 @@ export function Selector<T>(props: {
   onClose?: () => void;
   multiple?: boolean;
 }) {
+  const selectedItemRef = useRef<HTMLDivElement>(null);
   const [selectedValues, setSelectedValues] = useState<T[]>(
     Array.isArray(props.defaultSelectedValue)
       ? props.defaultSelectedValue
@@ -493,6 +496,19 @@ export function Selector<T>(props: {
       ? [props.defaultSelectedValue]
       : [],
   );
+  const firstSelectedIndex = props.items.findIndex((item) =>
+    selectedValues.includes(item.value),
+  );
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      selectedItemRef.current?.scrollIntoView({
+        block: "center",
+      });
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const handleSelection = (e: MouseEvent, value: T) => {
     if (props.multiple) {
@@ -520,6 +536,7 @@ export function Selector<T>(props: {
                 className={clsx(styles["selector-item"], {
                   [styles["selector-item-disabled"]]: item.disable,
                 })}
+                elementRef={i === firstSelectedIndex ? selectedItemRef : undefined}
                 key={i}
                 title={item.title}
                 subTitle={item.subTitle}

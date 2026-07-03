@@ -81,10 +81,22 @@ const en: LocaleType = {
       Masks: "Masks",
       Clear: "Clear Context",
       Settings: "Settings",
-      UploadImage: "Upload Images",
+      UploadImage: "Upload Files",
+      WebSearch: "Web",
     },
     Rename: "Rename Chat",
     Typing: "Typing…",
+    WebSearch: {
+      Summary: (count: number) => `Web search used · ${count} sources`,
+      Failed: "Some web results were unavailable",
+      Fallback:
+        "Web search did not return usable results, so the reply fell back to normal chat.",
+      Empty: "Web search ran, but no usable sources were returned.",
+      Mode: {
+        Tool: "Model-initiated search",
+        Decision: "Decision-step search",
+      },
+    },
     Input: (submitKey: string) => {
       var inputHints = `${submitKey} to send`;
       if (submitKey === String(SubmitKey.Enter)) {
@@ -262,7 +274,7 @@ const en: LocaleType = {
 
       LocalState: "Local Data",
       Overview: (overview: any) => {
-        return `${overview.chat} chats，${overview.message} messages，${overview.prompt} prompts，${overview.mask} masks`;
+        return `${overview.chat} chats, ${overview.message} messages, ${overview.prompt} prompts`;
       },
       ImportFailed: "Failed to import from file",
     },
@@ -344,7 +356,25 @@ const en: LocaleType = {
 
         Endpoint: {
           Title: "OpenAI Endpoint",
-          SubTitle: "Must start with http(s):// or use /api/openai as default",
+          SubTitle:
+            "Enter an OpenAI-compatible endpoint, or use /api/openai for the local proxy",
+        },
+        SyncModel: {
+          Title: "Sync Models",
+          Action: "Refresh Models",
+          Loading: "Syncing available models from the endpoint",
+          EmptyEndpoint: "No endpoint configured, so no models are available",
+          EmptyResult: "The endpoint returned no models",
+          Failed: "Failed to sync models",
+          Success: (count: number) => `Synced ${count} models`,
+        },
+      },
+      Tavily: {
+        ApiKey: {
+          Title: "Tavily Key",
+          SubTitle:
+            "Used for web search. Leave empty to use the server environment key or Bing fallback",
+          Placeholder: "tvly-...",
         },
       },
       Azure: {
@@ -557,6 +587,9 @@ const en: LocaleType = {
     },
 
     Model: "Model",
+    EmptyModel: "No models available",
+    SelectModel: "Select a model",
+    ModelRequired: "Sync and select a model first",
     CompressModel: {
       Title: "Summary Model",
       SubTitle: "Model used to compress history and generate title",
